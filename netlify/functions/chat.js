@@ -1,99 +1,82 @@
 exports.handler = async (event) => {
-  const headers = {
-    "Content-Type": "application/json"
-  };
+  const headers = { "Content-Type": "application/json" };
+  const fail = (code, msg) => ({
+    statusCode: code,
+    headers,
+    body: JSON.stringify({ error: msg }),
+  });
 
-  if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers,
-      body: JSON.stringify({
-        error: "Please use POST to send a message."
-      })
-    };
-  }
+  if (event.httpMethod !== "POST")
+    return fail(405, "Please use POST to send a message.");
 
   try {
     const apiKey = process.env.GROQ_API_KEY;
-
-    if (!apiKey) {
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({
-          error: "GROQ_API_KEY is missing in Netlify environment variables."
-        })
-      };
-    }
+    if (!apiKey) return fail(500, "GROQ_API_KEY is missing.");
 
     const body = JSON.parse(event.body || "{}");
-let message = body.message || body.text || body.prompt || body.input || body.content;
-if (!message && Array.isArray(body.messages)) {
-  const lastUser = [...body.messages].reverse().find((m) => m.role === "user");
-  message = lastUser && lastUser.content;
-}
-
-    if (!message || typeof message !== "string") {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({
-          error: "Please enter a message."
-        })
-      };
+    const history = Array.isArray(body.messages)
+      ? body.messages.filter(
+          (m) => m && m.role !== "system" && typeof m.content === "string"
+        )
+      : [];
+    let message =
+      body.message || body.text || body.prompt || body.input || body.content;
+    if (!message && history.length) {
+      const last = [...history].reverse().find((m) => m.role === "user");
+      message = last && last.content;
     }
+    if (!message || typeof message !== "string")
+      return fail(400, "Please enter a message.");
+
+    const system = {
+      role: "system",
+      content:
+        typeof body.system === "string" && body.system
+          ? body.system
+          : "You are Nova, a helpful AI assistant.",
+    };
+    const msgs = history.length
+      ? [system, ...history]
+      : [system, { role: "user", content: message }];
 
     const response = await fetch(
       "https://api.groq.com/openai/v1/chat/completions",
       {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           model: "openai/gpt-oss-120b",
-          messages: [
-            {
-              role: "system",
-              content: "You are Nova Enchanting Fairy, a helpful AI assistant."
-            },
-            {
-              role: "user",
-              content: message
-            }
-          ],
-          temperature: 0.7
-        })
+          messages: msgs,
+        }),
       }
     );
-
     const data = await response.json();
+    if (!response.ok)
+      return fail(
+        response.status,
+        (data.error && data.error.message) || "Groq error"
+      );
 
-    if (!response.ok) {
-      return {
-        statusCode: response.status,
-        headers,
-        body: JSON.stringify({
-          error: data.error?.message || "Groq API request failed."
-        })
-      };
-    }
-
+    const reply =
+      (data.choices &&
+        data.choices[0] &&
+        data.choices[0].message &&
+        data.choices[0].message.content) ||
+      "";
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({
-        reply: data.choices?.[0]?.message?.content || "No reply received."
-      })
+        reply,
+        text: reply,
+        response: reply,
+        content: reply,
+      }),
     };
-  } catch (error) {
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({
-        error: "Server error. Check your Netlify function logs."
-      })
-    };
+  } catch (e) {
+    return fail(500, e.message);
   }
 };
