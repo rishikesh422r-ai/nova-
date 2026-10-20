@@ -27,7 +27,11 @@ exports.handler = async (event) => {
     }
 
     const body = JSON.parse(event.body || "{}");
-    const message = body.message;
+let message = body.message || body.text || body.prompt || body.input || body.content;
+if (!message && Array.isArray(body.messages)) {
+  const lastUser = [...body.messages].reverse().find((m) => m.role === "user");
+  message = lastUser && lastUser.content;
+}
 
     if (!message || typeof message !== "string") {
       return {
